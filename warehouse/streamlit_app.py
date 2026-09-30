@@ -5184,7 +5184,7 @@ def _page_8():
             vals = [v for _, v in scored]
             fig = go.Figure(go.Bar(
                 x=vals, y=names, orientation="h",
-                marker=dict(color=["#B91C1C" if v > 1 else "#D6D3D1"
+                marker=dict(color=["#B91C1C" if v > 1 else S_YELLOW
                                    for v in vals]),
                 hovertext=[f'{n}<br>{v:.2f}x its target lag'
                            f'<br>mean {fmt(r["MEAN_LAG_SEC"],1)}s of '
