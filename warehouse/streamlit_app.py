@@ -3811,7 +3811,7 @@ def _page_4():
                                      hoverinfo="skip", showlegend=False))
             fig.add_trace(go.Scatter(x=xs, y=_band(-2),
                                      mode="lines", line=dict(width=0), fill="tonexty",
-                                     fillcolor=alpha("#A8A29E", 0.20),
+                                     fillcolor=alpha(S_YELLOW, 0.20),
                                      hoverinfo="skip", showlegend=False))
             fig.add_trace(go.Scatter(x=xs, y=base, mode="lines",
                                      line=dict(color=INK_2, width=1, dash="dot"),
@@ -3925,9 +3925,9 @@ def _page_4():
                     mine = d == dog
                     fig.add_trace(go.Box(
                         x=by_dog[d], name=f"dog {d}", orientation="h",
-                        marker=dict(color=S_ORANGE if mine else "#D6D3D1"),
+                        marker=dict(color=S_ORANGE if mine else S_YELLOW),
                         line=dict(width=1.4), boxpoints=False,
-                        fillcolor=alpha(S_ORANGE, 0.22) if mine else "#F5F5F4",
+                        fillcolor=alpha(S_ORANGE, 0.22) if mine else alpha(S_YELLOW, 0.18),
                         hoverinfo="x+name"))
                 fig.update_layout(
                     title=("activity index, this dog against the whole pack"
@@ -3969,7 +3969,7 @@ def _page_4():
                     [float(r["Z_SELF"] or 0) for r in _w],
                     [TRIAGE_COLOUR[3] if abs(r["Z_ABS"] or 0) > 2
                      else (S_ORANGE if abs(r["Z_ABS"] or 0) > 1
-                           else "#D6D3D1") for r in _w],
+                           else S_YELLOW) for r in _w],
                     horizontal=True,
                     # NO TRACK ON THIS ONE. z_self is SIGNED and centred on
                     # zero; a track drawn from the axis to the longest bar
@@ -4020,7 +4020,7 @@ def _page_4():
                 fig.add_trace(go.Scatter3d(
                     x=_t, y=_a, z=_z, mode="lines",
                     line=dict(color=[abs(v) for v in _z], width=4,
-                              colorscale=[[0, "#D6D3D1"], [0.5, S_ORANGE],
+                              colorscale=[[0, S_YELLOW], [0.5, S_ORANGE],
                                           [1, TRIAGE_COLOUR[3]]],
                               cmin=0, cmax=max([abs(v) for v in _z] or [1])),
                     text=[f'{str(r["EPOCH_TS"])[:19]}'
@@ -4614,11 +4614,11 @@ def _page_6():
             vals = [float(r["F_RATIO"] or 0) for r in fi][::-1]
             fig = go.Figure(go.Bar(
                 x=vals, y=names, orientation="h",
-                marker=dict(color=[S_ORANGE if "CORR" in n.upper() else "#D6D3D1"
+                marker=dict(color=[S_ORANGE if "CORR" in n.upper() else S_YELLOW
                                    for n in names]),
                 hovertext=[f"{n} {v:.2f}" for n, v in zip(names, vals)], hoverinfo="text"))
             fig.update_layout(title="how well each feature separates the states "
-                                    "(neck/back correlation in amber)",
+                                    "(neck/back correlation in orange)",
                               title_font_size=11)
             chart(evil_axes(fig, y_zero_line=False, dotted="x"), bars(len(names), row=16))
         else:
@@ -4797,7 +4797,12 @@ def _page_7():
     los = rows("""
         SELECT breed_group, intake_condition, median_los_days, n
         FROM REF.V_AAC_LENGTH_OF_STAY
-        WHERE n >= 50 ORDER BY median_los_days DESC LIMIT 40
+        WHERE n >= 50
+           -- Behaviour intakes are rare (73 in the synced window), so no
+           -- breed group reaches 50 and the comparison this tab exists to
+           -- make would never draw. They get a lower floor, said on the chart.
+           OR (UPPER(intake_condition) IN ('BEHAVIOR', 'BEHAVIOUR') AND n >= 10)
+        ORDER BY median_los_days DESC LIMIT 40
     """)
 
     if not intake and not punch:
@@ -4829,7 +4834,7 @@ def _page_7():
                 # shared baseline would have said "these two things", which is
                 # a different and wrong claim.
                 evil_area(fig, months, [float(r["N"] or 0) for r in intake],
-                          "#A8A29E", show_glow=False, top=0.22,
+                          S_YELLOW, show_glow=False, top=0.22,
                           text=[f'{str(r["MONTH"])[:7]}: {fmt(r["N"],0)} '
                                 f'dog intakes' for r in intake])
                 evil_area(fig, months,
@@ -4906,7 +4911,7 @@ warehouse noticed on day two.</b>
                         z = float(r["MEDIAN_LOS_DAYS"] or 0)
                         beh = str(r["INTAKE_CONDITION"] or "").upper() in (
                             "BEHAVIOR", "BEHAVIOUR")
-                        hue = S_ORANGE if beh else "#A8A29E"
+                        hue = S_ORANGE if beh else S_YELLOW
                         fig.add_trace(go.Scatter3d(
                             x=[gx, gx], y=[gy, gy], z=[0, z], mode="lines",
                             line=dict(color=alpha(hue, 0.55), width=5),
@@ -4936,7 +4941,8 @@ warehouse noticed on day two.</b>
                         "plotly · 3D",
                         f"{len(los)} breed-group x condition cells, marker size "
                         f"is n. Only combinations with at least 50 animals are "
-                        f"here — the empty floor is a sample-size floor, not a "
+                        f"here (behaviour cells: at least 10, because they are "
+                        f"rare) — the empty floor is a sample-size floor, not a "
                         f"shelter with no such dogs.")
 
             with r2r:
@@ -4956,7 +4962,7 @@ warehouse noticed on day two.</b>
                     evil_bar(
                         fig, names,
                         [float(r["MEDIAN_LOS_DAYS"] or 0) for r in top],
-                        [S_ORANGE if b else "#D6D3D1" for b in beh],
+                        [S_ORANGE if b else S_YELLOW for b in beh],
                         text=[f'{n}<br>median {fmt(r["MEDIAN_LOS_DAYS"],1)} days'
                               f'<br>{fmt(r["N"],0)} animals'
                               for n, r in zip(names, top)])
@@ -5035,7 +5041,8 @@ warehouse noticed on day two.</b>
         t1, t2 = st.columns(2)
         with t1:
             panel("Length of stay, in full",
-                  "Every breed-group × condition cell with at least 50 animals. "
+                  "Every breed-group × condition cell with at least 50 animals "
+                  "(behaviour cells: at least 10). "
                   "Filter it, sort it; the box scrolls and nothing is dropped.")
             conds = sorted({str(r["INTAKE_CONDITION"]) for r in los})
             groups = sorted({str(r["BREED_GROUP"]) for r in los})
@@ -5071,7 +5078,7 @@ warehouse noticed on day two.</b>
                 def _hue(r) -> str:
                     return (S_ORANGE
                             if str(r["INTAKE_CONDITION"] or "").upper()
-                            in ("BEHAVIOR", "BEHAVIOUR") else "#D6D3D1")
+                            in ("BEHAVIOR", "BEHAVIOUR") else S_YELLOW)
 
                 scroll_table(
                     [{"b": r["BREED_GROUP"], "c": r["INTAKE_CONDITION"],
@@ -5090,7 +5097,8 @@ warehouse noticed on day two.</b>
             else:
                 empty_state("No cell matches that combination.",
                             "Only breed-group × condition pairs with at least "
-                            "50 animals are kept, so most combinations are "
+                            "50 animals (10 for behaviour) are kept, so most "
+                            "combinations are "
                             "genuinely absent rather than hidden.")
         with t2:
             panel("The same categories, counted twice",
