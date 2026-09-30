@@ -1,0 +1,22 @@
+{
+  "name": "telltail-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TELLTAIL Solana attestation bridge. Polls ORACLE.PUBLISH_QUEUE, signs, submits to devnet, writes the audit trail back. The keypair never touches Snowflake.",
+  "scripts": {
+    "keygen": "node bridge/keygen.mjs",
+    "bridge": "node bridge/server.mjs",
+    "bridge:once": "node bridge/server.mjs --once",
+    "bridge:dry": "node bridge/server.mjs --once --dry-run",
+    "import-key": "node bridge/import-key.mjs"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.0",
+    "dotenv": "^16.4.5",
+    "snowflake-sdk": "^1.14.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,43 @@
+# --- secrets ---
+.env
+secrets/
+*.pem
+devnet.json
+/docs
+# --- data (10.6M rows; never committed) ---
+data/
+!data/.gitkeep
+
+# --- generated profile artefacts ---
+ref/column_map.json
+ref/profile_report.json
+ref/profile_report.md
+
+# --- python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# --- node ---
+node_modules/
+npm-debug.log*
+bridge/*.js.map
+
+# --- docs: only the README is published ---
+*.md
+!README.md
+
+# --- logs / local tooling ---
+*.log
+.claude/
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- build spec pdf stays, assets stay ---

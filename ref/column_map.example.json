@@ -1,0 +1,93 @@
+{
+  "_meta": {
+    "status": "PRIOR — NOT VERIFIED AGAINST THE FILE",
+    "what_this_is": [
+      "This is a *candidate* mapping written from the published data description",
+      "(Vehkaoja et al., Data in Brief 2022) before the CSV was in hand. It exists so",
+      "the DDL has a shape to compile against, NOT so anyone can skip profiling.",
+      "",
+      "scripts/profile_dataset.py reads the real CSV header and the real distinct",
+      "label values and writes ref/column_map.json, which is what every other script",
+      "actually loads. If ref/column_map.json is absent, load_raw.py refuses to run.",
+      "",
+      "Guessing column names here costs an hour of silent nulls. Do not skip Gate A."
+    ],
+    "authoritative_file": "ref/column_map.json (generated)",
+    "generated_by": "python scripts/profile_dataset.py"
+  },
+
+  "source_file": "DogMoveData.csv",
+  "info_file": "DogInfo.csv",
+
+  "columns": {
+    "dog_id": "DogID",
+    "test_num": "TestNum",
+    "t_sec": "t_sec",
+
+    "neck_ax": "ANeck_x",
+    "neck_ay": "ANeck_y",
+    "neck_az": "ANeck_z",
+    "neck_gx": "GNeck_x",
+    "neck_gy": "GNeck_y",
+    "neck_gz": "GNeck_z",
+
+    "back_ax": "ABack_x",
+    "back_ay": "ABack_y",
+    "back_az": "ABack_z",
+    "back_gx": "GBack_x",
+    "back_gy": "GBack_y",
+    "back_gz": "GBack_z",
+
+    "label_primary": "Behavior_1",
+    "label_secondary": "Behavior_2",
+    "label_tertiary": "Behavior_3",
+    "point_event": "PointEvent",
+    "task": "Task"
+  },
+
+  "info_columns": {
+    "dog_id": "DogID",
+    "breed": "Breed",
+    "sex": "Sex",
+    "age_years": "Age",
+    "weight_kg": "Weight",
+    "height_cm": "Height"
+  },
+
+  "ethogram_map": {
+    "_comment": [
+      "Raw label value -> TELLTAIL ethogram state. Rebuilt at Gate A from the real",
+      "distinct values with counts. Anything in the file and not in this map lands",
+      "as state_source='UNMAPPED' and is counted loudly, never silently dropped."
+    ],
+    "Galloping": "GALLOP",
+    "Trotting": "TROT",
+    "Walking": "WALK",
+    "Pacing": "PACE",
+    "Standing": "STAND",
+    "Sitting": "SIT",
+    "Lying chest": "REST",
+    "Sniffing": "SNIFF",
+    "Playing": "PLAY",
+    "Shaking": "SHAKE",
+    "Body shake": "SHAKE",
+    "Scratching": "SCRATCH",
+    "Eating": "SNIFF",
+    "Drinking": "SNIFF",
+    "Panting": "STAND",
+    "Bowing": "PLAY",
+    "Jumping": "PLAY",
+    "Carrying object": "WALK",
+    "Tugging": "PLAY",
+    "<undefined>": null,
+    "Undefined": null
+  },
+
+  "expected": {
+    "_comment": "Assertions load_raw.py checks after COPY INTO. A mismatch aborts.",
+    "row_count": 10611068,
+    "column_count": 20,
+    "distinct_dogs": 45,
+    "sample_rate_hz": 100
+  }
+}

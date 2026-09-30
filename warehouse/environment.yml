@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# Packages for Streamlit in Snowflake.
+#
+# THIS FILE MUST SHIP TO THE STAGE NEXT TO streamlit_app.py. Without it, plotly
+# raises ModuleNotFoundError in SiS only — it imports fine locally, which is a
+# genuinely confusing hour of your life.
+#
+# scripts/deploy_streamlit.py PUTs both files together and refuses to deploy the
+# app without this one.
+# ---------------------------------------------------------------------------
+name: sf_env
+channels:
+  - snowflake
+# NO `- python=3.11` HERE. Streamlit in Snowflake resolves this file against the
+# `snowflake` Anaconda channel, which carries no package literally named
+# `python`, so pinning it fails the whole app at load with
+#   'Packages not found: python==3.11'
+# and the app never renders. The interpreter version is a property of the
+# STREAMLIT object, not a dependency — SiS pins 3.11 itself, which is exactly
+# why tests/sis_compat.py parses the app under 3.11 before deploying.
+dependencies:
+  - plotly
+  - pandas
+  - numpy
+  # Bokeh draws the linked multi-panel signal view on Live Collar, and nothing
+  # else. It is here rather than in Streamlit's own dependency set because
+  # Streamlit does not depend on it — unlike altair, which ships with
+  # streamlit and is therefore DELIBERATELY NOT LISTED HERE. Declaring altair
+  # would put a second constraint on a package Streamlit already pins, and the
+  # conda solve in SiS is all-or-nothing: if it fails, the app does not render
+  # a broken chart, it does not render at all.
+  #
+  # The app never calls st.bokeh_chart — that helper pinned Bokeh to exactly
+  # 2.4.3 and the Snowflake channel's Bokeh is 3.x. See bokeh_panel().
+  - bokeh
