@@ -41,7 +41,7 @@ which is otitis and nothing else.
 ## Quickstart
 
 ```bash
-git clone https://github.com/SoumyaEXE/telltail && cd telltail
+git clone https://github.com/dronzer2code/telltail && cd telltail
 cp .env.example .env                     # fill in Snowflake creds
 pip install -r requirements.txt && npm install
 
