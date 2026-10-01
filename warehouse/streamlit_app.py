@@ -252,7 +252,7 @@ st.markdown(f"""
      Breed names run from "Beauceron" to "Nova Scotia Duck Tolling Retriever";
      left to themselves they wrap onto a second line, shove the triage badge
      down, and every card in that row ends up a different height. */
-  .tt-dogcard {{ display:flex; flex-direction:column; min-height: 180px;
+  .tt-dogcard {{ display:flex; flex-direction:column; min-height: 204px;
       margin-bottom: 8px; padding: 11px 13px; }}
   .tt-dogcard-head {{ display:flex; justify-content:space-between;
       align-items:flex-start; gap:8px; }}
@@ -270,6 +270,16 @@ st.markdown(f"""
      is what makes the bottom edges line up across a row */
   .tt-spark {{ margin-top:auto; padding-top:8px; }}
   .tt-dogcard-foot {{ margin-top:4px; }}
+  /* Confidence row: the word and percent first, a thin meter after. The word
+     carries the meaning on its own, so the colour is never the only cue. */
+  .tt-conf {{ display:flex; align-items:center; gap:7px; margin-top:6px;
+      font-size:12px; color:{INK_2}; }}
+  .tt-conf b {{ white-space:nowrap; }}
+  /* Both BLOCK. The fill was an inline span, and an inline box ignores width
+     and height — every meter rendered as an empty grey track. */
+  .tt-conf-track {{ display:block; flex:1 1 auto; height:6px; border-radius:3px;
+      background:{BORDER}; overflow:hidden; min-width:40px; }}
+  .tt-conf-fill {{ display:block; height:100%; border-radius:3px; }}
   /* ------------------------------------------------------------------
      LEFT RAIL. The nav is an st.radio because the router needs its value,
      but a bare radio list reads as a form control rather than navigation.
@@ -998,6 +1008,28 @@ def fmt(v, nd: int = 2, dash: str = "—") -> str:
     if isinstance(v, (int, float)):
         return f"{v:,.{nd}f}" if isinstance(v, float) else f"{v:,}"
     return str(v)
+
+
+# CONFIDENCE IN WORDS. The card reader is a caretaker, not a data scientist:
+# "0.683" means nothing to them, "Medium — 68%" does. The bands are written
+# once here so the card, its tooltip and the explainer under the grid can
+# never disagree about where High stops.
+CONF_LEVELS = [            # (floor, word, colour)
+    (0.75, "High",   "#15803D"),
+    (0.50, "Medium", "#B45309"),
+    (0.00, "Low",    "#B91C1C"),
+]
+
+
+def confidence_level(v):
+    """(word, colour, percent) for a classifier probability, or None if absent."""
+    if v is None:
+        return None
+    v = float(v)
+    for floor, word, colour in CONF_LEVELS:
+        if v >= floor:
+            return word, colour, round(100 * v)
+    return CONF_LEVELS[-1][1], CONF_LEVELS[-1][2], round(100 * v)
 
 
 def clean_axes(fig, *, y_zero_line: bool = True):
@@ -1945,9 +1977,15 @@ def _page_0():
     pack = rows("""
         SELECT p.*, t.triage_label, t.severity AS triage_severity, f.n_findings
         FROM MARTS.PACK_STATUS p
+        -- Label and severity from the SAME row: the dog's worst finding. This
+        -- was ANY_VALUE(label) beside MAX(severity), which painted a red
+        -- "urgent" badge reading "schedule appointment" whenever a dog had
+        -- findings at two different triage levels.
         LEFT JOIN (
-            SELECT dog_id, ANY_VALUE(triage_label) AS triage_label, MAX(severity) AS severity
-            FROM AI.TRIAGE GROUP BY dog_id
+            SELECT dog_id, triage_label, severity
+            FROM AI.TRIAGE
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY dog_id
+                                       ORDER BY severity DESC, generated_at DESC) = 1
         ) t ON t.dog_id = p.dog_id
         LEFT JOIN (
             SELECT dog_id, COUNT(*) AS n_findings FROM MARTS.SYNDROME_MATCHES GROUP BY dog_id
@@ -2163,6 +2201,39 @@ def _page_0():
             spark = sparkline_svg(by_dog.get(d["DOG_ID"]) or [],
                                   colour=ACCENT if live else "#C9C4BE")
             photo = breed_photo(d.get("BREED"), 44, photos=photos)
+
+            # CONFIDENCE, IN WORDS. The headline is the model's average
+            # certainty across every second it labelled for this dog — steady
+            # enough to trust, unlike the current second's number, which jumps
+            # each refresh and goes in the tooltip instead.
+            lvl = confidence_level(d.get("AVG_MODEL_CONFIDENCE"))
+            now = confidence_level(d.get("CURRENT_STATE_CONFIDENCE"))
+            pct_model = d.get("PCT_MODEL")
+            tip = esc(
+                "Confidence = how sure the model is, on average, about what "
+                "this dog was doing each second. High is 75% or more, Medium "
+                "50-74%, Low under 50%."
+                + (f" Right now ({state}): {now[2]}% sure." if now else "")
+                + (f" The model labelled {fmt(pct_model, 0)}% of this dog's "
+                   f"seconds; the rest were labelled by simple rules."
+                   if pct_model is not None else ""))
+            if lvl:
+                word, hue, pct = lvl
+                conf_html = (
+                    f'<div class="tt-conf" title="{tip}">'
+                    f'Confidence <b style="color:{hue}">{word} · {pct}%</b>'
+                    # The fill wears the card's TRIAGE colour (the same hue as
+                    # the badge top-right), so a red card reads red top to
+                    # bottom; the level word keeps its own colour and meaning.
+                    f'<div class="tt-conf-track"><div class="tt-conf-fill" '
+                    f'style="width:{pct}%;background:{colour}"></div></div></div>')
+            else:
+                # Rules classifier, or no model seconds yet: say so plainly
+                # rather than printing 0% and implying the model is unsure.
+                conf_html = (
+                    f'<div class="tt-conf" title="{tip}">Confidence '
+                    f'<b>not available</b><span class="tt-quiet">— labelled by '
+                    f'rules, not the model</span></div>')
             with c:
                 st.markdown(f"""
 <div class="tt-card tt-dogcard">
@@ -2185,12 +2256,31 @@ def _page_0():
     <span class="tt-chip">z<sub>self</sub> {fmt(d.get('Z_SELF'))}</span>
     <span class="tt-chip">{fmt(d.get('N_FINDINGS') or 0,0)} findings</span>
   </div>
+  {conf_html}
   <div class="tt-spark">{spark}</div>
-  <div class="tt-quiet tt-dogcard-foot">
-    {fmt(d.get('EPOCHS_TOTAL') or 0,0)} epochs ·
-    {fmt(d.get('PCT_HEURISTIC') or 0,1)}% heuristic · {freshness}
+  <div class="tt-quiet tt-dogcard-foot" title="{tip}">
+    {fmt(d.get('EPOCHS_TOTAL') or 0,0)} seconds watched ·
+    {fmt(pct_model, 0)}% by model · {freshness}
   </div>
 </div>""", unsafe_allow_html=True)
+
+    # The key to the confidence row, in plain words, once under the grid. Built
+    # from CONF_LEVELS so it cannot drift from what the cards actually do.
+    if pack:
+        _bands = " · ".join(
+            f'<b style="color:{hue}">{word}</b> '
+            + (f"{round(100 * floor)}%+" if floor > 0 else
+               f"under {round(100 * CONF_LEVELS[-2][0])}%")
+            for floor, word, hue in CONF_LEVELS)
+        st.markdown(
+            f'<div class="tt-quiet" style="margin-top:6px">'
+            f'<b>Confidence</b> is how sure the model is about what each dog '
+            f'was doing, second by second, averaged over everything it has '
+            f'seen of that dog. {_bands}. <b>% by model</b> is how many of '
+            f'those seconds the model labelled itself; the rest were labelled '
+            f'by simple rules (for example, head shakes and scratching). Hover '
+            f'a card for how sure the model is right now.</div>',
+            unsafe_allow_html=True)
 
     # Said once under the grid rather than 45 times inside it, and repeated
     # in the rail. A photograph implying it is the animal being diagnosed
@@ -2222,7 +2312,9 @@ def _page_0():
     with p1:
         panel("Provenance",
               "Where each epoch's state came from. The heuristic share is the "
-              "banner at the top of every tab, in numbers.")
+              "banner at the top of every tab, in numbers. A card's \"% by "
+              "model\" counts only MODEL rows; every other source here counts "
+              "against it.")
         if prov:
             html_table(
                 [{"s": r["STATE_SOURCE"], "n": fmt(r["EPOCHS"], 0),
@@ -5530,17 +5622,152 @@ def _page_9():
                'Corpus: ' || (SELECT COUNT(*) FROM MARTS.EPOCH_STATES) ||
                ' classified epochs over ' ||
                (SELECT COUNT(*) FROM REF.DOG_INFO) || ' dogs'
+        UNION ALL
+        SELECT 'triage_key',
+               'Triage levels, worst first: urgent veterinary attention (severity '
+            || '3) > schedule appointment (2) > routine monitoring (1). "Severe", '
+            || '"serious", "critical" or "worst" means severity 3.'
+        UNION ALL
+        SELECT 'pack_brief', 'Duty-nurse handover for the whole pack: ' || brief
+        FROM AI.PACK_BRIEF
+        UNION ALL
+        SELECT 'syndrome_guide',
+               syndrome_code || ' ' || syndrome_name || ' (' || body_system || '): '
+            || clinical_rationale
+        FROM REF.SYNDROME_CATALOGUE
     """)
+
+    # ---- the pack, dog by dog ------------------------------------------
+    #
+    # The facts above are pack-wide totals, and a pack-wide total cannot say
+    # WHICH dog is in trouble — which is the first thing anyone asks. One line
+    # per dog and one line per finding, worst first. Confidence is written as a
+    # percentage here so the model never has to guess what 0.946 means, and
+    # every concatenated column is COALESCEd: in Snowflake one NULL turns the
+    # whole || chain NULL and the dog silently drops out of the context.
+    dogs = rows("""
+        WITH t AS (
+            SELECT dog_id, triage_label, severity FROM AI.TRIAGE
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY dog_id
+                                       ORDER BY severity DESC, generated_at DESC) = 1
+        ),
+        f AS (
+            SELECT dog_id, syndrome_code, ANY_VALUE(syndrome_name) AS syndrome_name,
+                   COUNT(*) AS n
+            FROM MARTS.SYNDROME_MATCHES GROUP BY dog_id, syndrome_code
+        ),
+        fl AS (
+            SELECT dog_id, SUM(n) AS n_findings,
+                   LISTAGG(syndrome_code || ' ' || syndrome_name || ' x' || n, '; ')
+                       WITHIN GROUP (ORDER BY n DESC) AS finding_list
+            FROM f GROUP BY dog_id
+        ),
+        -- How each dog spends its time. Without this the chat can say who is
+        -- sick but not who sleeps most, plays most or paces — and those are
+        -- the questions an owner actually asks.
+        bs AS (
+            SELECT dog_id, state,
+                   ROUND(100 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY dog_id)) AS pct
+            FROM MARTS.EPOCH_STATES WHERE state <> 'UNKNOWN'
+            GROUP BY dog_id, state
+        ),
+        b AS (
+            SELECT dog_id,
+                   LISTAGG(state || ' ' || pct || '%', ', ')
+                       WITHIN GROUP (ORDER BY pct DESC) AS time_split,
+                   MAX(IFF(state = 'REST', pct, 0)) AS rest_pct
+            FROM bs WHERE pct >= 1 GROUP BY dog_id
+        )
+        SELECT p.dog_id, p.breed, COALESCE(t.severity, 0) AS severity,
+               t.triage_label, COALESCE(fl.n_findings, 0) AS n_findings,
+               'Dog ' || p.dog_id || ' (' || COALESCE(p.breed, 'unknown breed')
+            || ', ' || COALESCE(p.sex, 'sex unknown')
+            || ', ' || COALESCE(TO_VARCHAR(ROUND(p.age_years, 1)), '?') || ' years'
+            || ', ' || COALESCE(TO_VARCHAR(ROUND(p.weight_kg, 1)), '?') || ' kg'
+            || ', group ' || COALESCE(p.cohort_id, '?') || '). Triage: '
+            || COALESCE(t.triage_label, 'no finding, not triaged')
+            || '. Findings: ' || COALESCE(TO_VARCHAR(fl.n_findings), '0')
+            || COALESCE(' (' || fl.finding_list || ')', '')
+            || '. Doing now: ' || COALESCE(p.current_state, 'unknown')
+            || '. Behaviour-reading confidence: '
+            || COALESCE(TO_VARCHAR(ROUND(100 * p.avg_model_confidence)) || '%', 'n/a')
+            || '. Activity vs own normal: '
+            || COALESCE(TO_VARCHAR(ROUND(p.z_self, 2)) || ' SD', 'not enough history')
+            || ', vs similar dogs: '
+            || COALESCE(TO_VARCHAR(ROUND(p.z_cohort, 2)) || ' SD', 'n/a')
+            || '. Time spent: ' || COALESCE(b.time_split, 'n/a')
+            || '. Watched for ' || COALESCE(TO_VARCHAR(p.epochs_total), '0')
+            || ' seconds' || IFF(p.seconds_since_last_epoch < 604800,
+                                 ' (live feed)', ' (archive recording)') || '.'
+               AS fact
+        FROM MARTS.PACK_STATUS p
+        LEFT JOIN t  ON t.dog_id  = p.dog_id
+        LEFT JOIN fl ON fl.dog_id = p.dog_id
+        LEFT JOIN b  ON b.dog_id  = p.dog_id
+        ORDER BY COALESCE(t.severity, 0) DESC, COALESCE(fl.n_findings, 0) DESC, p.dog_id
+    """)
+    findings = rows("""
+        SELECT 'Dog ' || f.dog_id || ': ' || f.syndrome_code || ' '
+            || f.syndrome_name || ' (' || f.body_system || '), started '
+            || TO_VARCHAR(f.onset_ts, 'YYYY-MM-DD HH24:MI') || ' UTC, lasted '
+            || COALESCE(TO_VARCHAR(f.duration_s), '?') || ' s, detection confidence '
+            || COALESCE(TO_VARCHAR(ROUND(100 * f.confidence)) || '%', 'n/a')
+            || ', triage ' || COALESCE(t.triage_label, 'not yet triaged') || '.'
+               AS fact
+        FROM MARTS.V_FINDINGS f
+        LEFT JOIN AI.TRIAGE t
+               ON t.dog_id = f.dog_id AND t.syndrome_code = f.syndrome_code
+              AND t.onset_ts = f.onset_ts
+        ORDER BY COALESCE(t.severity, f.severity) DESC, f.confidence DESC, f.onset_ts DESC
+    """)
+    # EXACT COUNTS, precomputed. Asked "how many dogs are healthy?" the model
+    # read 45 dog lines, said "fifteen" and then listed fourteen — counting a
+    # long list is the thing language models are worst at. Any number a
+    # question is likely to need is counted here, in Python, and handed over.
+    def _name(r) -> str:
+        return f"Dog {r['DOG_ID']} ({r.get('BREED') or 'unknown breed'})"
+    summary = []
+    for label in ("urgent veterinary attention", "schedule appointment",
+                  "routine monitoring"):
+        grp = [r for r in dogs if r.get("TRIAGE_LABEL") == label]
+        summary.append(f"{label}: {len(grp)} dogs"
+                       + (" — " + ", ".join(_name(r) for r in grp) if grp else ""))
+    clean = [r for r in dogs if not r.get("N_FINDINGS")]
+    summary.append(f"no findings at all: {len(clean)} dogs"
+                   + (" — " + ", ".join(_name(r) for r in clean) if clean else ""))
+    summary.append(f"at least one finding: {len(dogs) - len(clean)} dogs")
+    by_breed: dict = {}
+    for r in dogs:
+        by_breed.setdefault(r.get("BREED") or "unknown breed", []).append(
+            f"Dog {r['DOG_ID']}")
+    shared = [f"{b}: {', '.join(ids)}" for b, ids in sorted(by_breed.items())
+              if len(ids) > 1]
+    pack_facts = [
+        {"TOPIC": "pack_counts",
+         "FACT": f"EXACT counts, use these rather than counting: {len(dogs)} "
+                 f"dogs in total. " + "; ".join(summary) + "."},
+        {"TOPIC": "breeds",
+         "FACT": f"{len(by_breed)} breeds. Breeds with more than one dog — "
+                 f"{'; '.join(shared) if shared else 'none'}."},
+    ]
+    facts = (facts + pack_facts
+             + [{"TOPIC": "dog", "FACT": r["FACT"]} for r in dogs]
+             + [{"TOPIC": "finding", "FACT": r["FACT"]} for r in findings])
     context = chr(10).join(f"- [{r['TOPIC']}] {r['FACT']}"
                            for r in facts if r.get("FACT"))
 
+    # The dog the starters should ask about: the worst one in THIS warehouse,
+    # not a number hard-coded from one run of the replay.
+    worst = dogs[0] if dogs else None
+    worst_name = (f"Dog {worst['DOG_ID']}" if worst else "the most urgent dog")
     examples = [
-        ("Which fired?",    "Which syndromes fired, and which found nothing?"),
-        ("How accurate?",   "How accurate is the classifier, honestly?"),
-        ("Versus Austin?",  "How does what we detect compare to the Austin "
-                            "shelter outcomes?"),
-        ("Model or rule?",  "What fraction of states came from the model rather "
-                            "than a heuristic?"),
+        ("Who needs a vet?", "Which dogs are in the most severe condition right "
+                             "now, and what should be done for each?"),
+        (f"About {worst_name}", f"Tell me everything about {worst_name}: what was "
+                                f"seen, what it could mean, and what to do next."),
+        ("Check today?",     "What should a caretaker check on the pack today?"),
+        ("How sure?",        "How sure are these readings, and how far should I "
+                             "trust them?"),
     ]
 
     # ---- submission happens in callbacks ---------------------------------
@@ -5567,25 +5794,173 @@ def _page_9():
     history = st.session_state.setdefault("tt_chat", [])
 
     if question:
-        prompt = (
-            "You are TELLTAIL, a veterinary telemetry analyst. Answer the "
-            "question using ONLY the facts listed below, which come from a "
-            "Snowflake warehouse. Quote the specific numbers you use. If the "
-            "facts do not contain the answer, say exactly what is missing "
-            "rather than guessing. Be concise: at most 130 words. Never imply "
-            "this is a diagnosis." + chr(10) * 2 + "FACTS:" + chr(10) + context
-            + chr(10) * 2 + "QUESTION: " + question
-        )
-        try:
-            ans = rows_live(
-                "SELECT SNOWFLAKE.CORTEX.COMPLETE("
-                + sq(CORTEX_MODEL) + ", " + sq(prompt) + ") AS a")
-            history.append({"q": question, "a": one(ans, "A", ""),
-                            "n": len(facts), "ok": True})
-        except Exception as exc:  # noqa: BLE001
-            history.append({"q": question, "ok": False,
-                            "a": "Cortex did not answer: " + str(exc)[:280],
-                            "n": len(facts)})
+        # ---- which dogs is this question about? ---------------------------
+        #
+        # By number ("dog 74", "#43", "dogs 23 and 45"), by breed ("the German
+        # Shepherd"), or — for a follow-up like "what should I do about him?" —
+        # whichever dogs the previous answer was about. No dog named at all and
+        # the question gets the most urgent dogs, because "who is worst" is the
+        # question nobody phrases with a number in it.
+        import re
+        known = {int(r["DOG_ID"]): r for r in dogs}
+        ql = question.lower()
+        named: list[int] = []
+        if re.search(r"\bdogs?\b|#", ql):
+            named += [int(n) for n in re.findall(r"\d{1,3}", ql) if int(n) in known]
+        for did, r in known.items():
+            breed = (r.get("BREED") or "").lower()
+            if breed and breed in ql and did not in named:
+                named.append(did)
+        # Carry the previous dogs over only for a question that points back at
+        # them. "Which dog is sickest?" right after "compare 23 and 45" is a
+        # new question about the whole pack, not about 23 and 45.
+        refers_back = re.search(
+            r"\b(him|her|his|hers|he|she|it|its|they|them|their|this dog|"
+            r"that dog|these dogs|those dogs|same dog|uska|uski|iska|iski|"
+            r"usko|isko|woh|ye)\b", ql)
+        if not named and history and refers_back:
+            named = list(history[-1].get("dogs") or [])
+        focus = named[:6] or [int(r["DOG_ID"]) for r in dogs
+                              if (r.get("SEVERITY") or 0) > 0][:5]
+
+        # ---- the vet notes for those dogs, in full ------------------------
+        # The SOAP notes are the richest thing in the warehouse and far too
+        # long to send all 100+ of them every time, so only the focus dogs'
+        # notes go in: worst first, at most three per dog. Ids are ints taken
+        # from PACK_STATUS, never user text, so the IN list is safe to inline.
+        notes = []
+        if focus:
+            id_list = ", ".join(str(d) for d in focus)
+            notes = rows(f"""
+                SELECT 'Vet note, Dog ' || dog_id || ' — ' || syndrome_code || ' '
+                    || syndrome_name || ', ' || TO_VARCHAR(onset_ts, 'YYYY-MM-DD HH24:MI')
+                    || ' UTC, triage ' || triage_label || ', detection confidence '
+                    || COALESCE(TO_VARCHAR(ROUND(100 * confidence)) || '%', 'n/a')
+                    || ': ' || REPLACE(soap_note, CHR(10), ' ') AS fact
+                FROM AI.V_VET_NOTE_FULL
+                WHERE dog_id IN ({id_list})
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY dog_id
+                        ORDER BY severity DESC, confidence DESC, onset_ts DESC) <= 3
+                ORDER BY severity DESC, confidence DESC
+            """)
+        turn_context = context + "".join(
+            chr(10) + "- [vet_note] " + r["FACT"] for r in notes if r.get("FACT"))
+
+        # Recent turns, so "and what about him?" means something. Answers are
+        # trimmed: they are there for reference, not to be re-read in full.
+        recent = "".join(
+            f"{chr(10)}Q: {t['q']}{chr(10)}A: {str(t.get('a', ''))[:700]}"
+            for t in history[-3:] if t.get("ok"))
+
+        # NO TEMPLATE. An earlier version forced every reply into the same four
+        # headings, so "hi", "which dog sleeps most?" and "is dog 74 OK?" all
+        # came back as the same form letter. The model is told what it knows
+        # and how to behave, and the SHAPE of the answer follows the question.
+        def _prompt(ctx: str) -> str:
+            return (
+                "You are TELLTAIL, an experienced, friendly veterinarian who "
+                "looks after a pack of dogs. Each dog wears a neck collar and a "
+                "back harness with motion sensors; the facts below were computed "
+                "from that data. You are chatting with an owner, a shelter "
+                "caretaker or a vet — answer whatever they ask, the way a good "
+                "vet would talk to them.\n\n"
+                "HOW TO BEHAVE\n"
+                "- Answer the actual question, directly, in the first sentence. "
+                "Fit the length and shape to the question: a greeting gets a "
+                "short friendly reply, a yes/no question gets yes or no plus "
+                "the reason, a 'which dog' question names the dogs, a request "
+                "for detail gets detail. Use headings or bullets only when they "
+                "make a longer answer easier to read.\n"
+                "- About THESE dogs (their health, behaviour, findings, numbers, "
+                "rankings, comparisons): use only the facts below, quote the "
+                "numbers, and name dogs as 'Dog <number> (<breed>)'. Never "
+                "invent a dog, a reading or a finding. You may count, rank, "
+                "compare and combine the facts to answer.\n"
+                "- General questions (dog care, a breed, a condition, what a "
+                "symptom means, what a vet would do): answer from your own "
+                "veterinary knowledge, and make clear it is general advice "
+                "rather than something measured on these dogs. Connect it back "
+                "to the pack when the facts allow.\n"
+                "- Questions about how TELLTAIL works (sensors, the model, "
+                "accuracy, confidence): explain simply, using the facts.\n"
+                "- For any count, use the 'pack_counts' fact; never count a "
+                "list yourself.\n"
+                "- If a description fits several dogs (e.g. a breed with more "
+                "than one dog — see 'breeds'), say how many match and cover "
+                "each one, briefly.\n"
+                "- You have NOT physically examined any dog. You read sensor "
+                "data and the written vet notes; never claim to have seen, "
+                "touched or examined a dog yourself.\n"
+                "- Stay on the question. Do not add unrelated statistics.\n"
+                "- If the facts genuinely cannot answer part of it, say what is "
+                "missing in one sentence — after answering everything you can. "
+                "Never reply with only a list of what is missing.\n"
+                "- Plain English. Explain technical words briefly. Say "
+                "'seconds', not 'epochs'; no column names. Confidence: 75%+ is "
+                "high, 50-74% medium, under 50% low.\n"
+                "- 'Severe', 'serious', 'critical', 'worst' = triage 'urgent "
+                "veterinary attention'.\n"
+                "- When you discuss a dog's health, add a short reminder that "
+                "this is sensor screening and a vet should examine the dog. "
+                "Skip it for greetings and non-health questions.\n"
+                "- Keep it under 350 words unless the question needs more.\n\n"
+                "FACTS:\n" + ctx
+                + (("\n\nEARLIER IN THIS CONVERSATION:" + recent)
+                   if recent else "")
+                + "\n\nQUESTION: " + question
+            )
+
+        # ---- an answer, every time -----------------------------------------
+        #
+        # Cortex fails in ordinary ways: a model that is not served in the
+        # region, a transient remote-service error, a prompt over a model's
+        # context, an empty completion. Each attempt below changes ONE thing —
+        # retry, then a smaller context, then a different model — and only
+        # when every model has refused does the page answer from the rows
+        # itself, which still names the dogs and quotes their numbers.
+        lean_context = context  # every dog and finding, no vet notes
+        tiny_context = chr(10).join(f"- [{r['TOPIC']}] {r['FACT']}"
+                                    for r in facts
+                                    if r["TOPIC"] in ("dog", "triage_key",
+                                                      "holdout", "syndromes"))
+        models = [CORTEX_MODEL] + [m for m in ("llama3.3-70b", "llama3.1-70b")
+                                   if m != CORTEX_MODEL]
+        attempts = [(CORTEX_MODEL, turn_context), (CORTEX_MODEL, turn_context),
+                    (CORTEX_MODEL, lean_context)]
+        attempts += [(m, ctx) for m in models[1:]
+                     for ctx in (lean_context, tiny_context)]
+        answer, used_model, errors = "", None, []
+        for model, ctx in attempts:
+            try:
+                res = rows_live(
+                    "SELECT SNOWFLAKE.CORTEX.COMPLETE("
+                    + sq(model) + ", " + sq(_prompt(ctx)) + ") AS a")
+                answer = (one(res, "A", "") or "").strip()
+                if answer:
+                    used_model = model
+                    break
+                errors.append(f"{model}: empty answer")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{model}: {str(exc)[:120]}")
+
+        n_used = len(facts) + len(notes)
+        if answer:
+            history.append({"q": question, "a": answer, "n": n_used,
+                            "ok": True, "model": used_model, "dogs": focus,
+                            "ctx": turn_context})
+        else:
+            # Last resort, no model at all: answer from the rows directly.
+            picked = [r for r in dogs if int(r["DOG_ID"]) in focus] or dogs[:5]
+            fallback = (
+                "The AI assistant is not reachable right now, so here is what "
+                "the warehouse says about the most relevant dogs:\n\n"
+                + "\n".join("- " + r["FACT"] for r in picked)
+                + "\n\n*Sensor screening only — a vet should examine any dog "
+                  "you are worried about. Try your question again in a minute.*")
+            history.append({"q": question, "a": fallback, "n": n_used,
+                            "ok": True, "model": "no model — straight from SQL",
+                            "dogs": focus, "ctx": turn_context,
+                            "errors": errors})
         st.session_state["tt_chat"] = history
 
     # ---- layout -----------------------------------------------------------
@@ -5604,20 +5979,22 @@ def _page_9():
         st.markdown(
             '<div class="tt-quiet" style="font-size:12px;line-height:1.5;'
             'margin-bottom:18px">'
-            'Answers come from <span class="tt-mono">AI_COMPLETE</span> over a '
-            'factual context assembled from the warehouse in SQL — printed in '
-            'full at the bottom of this page, so any number here can be traced '
-            'to the table it came from. The model is given the facts and your '
-            'question, never the conversation, so it will not follow up on '
-            'itself.</div>', unsafe_allow_html=True)
+            'Answers come from <span class="tt-mono">AI_COMPLETE</span> over '
+            'facts assembled from the warehouse in SQL: every dog, every '
+            'finding, and the full vet notes for the dogs your question is '
+            'about. The exact context is printed at the bottom of this page, so '
+            'any number here can be traced to the table it came from. The last '
+            'few questions are remembered, so you can follow up.</div>',
+            unsafe_allow_html=True)
 
         if not history:
             chat_bubble(
-                "Hello, I am TELLTAIL. Ask me about the pack, the syndromes, "
-                "the classifier or the pipeline.\n\nI answer only from rows in "
-                "this warehouse, and the exact facts I was handed are printed "
-                "under every answer. If the answer is not in them I will say "
-                "which table is missing rather than invent one.",
+                "Hello, I am TELLTAIL, the duty vet for this pack. Ask me which "
+                "dogs need attention, about any dog by number or breed, or what "
+                "to check today.\n\nI answer only from this warehouse — what "
+                "the collars saw, the findings, and the vet notes — and I will "
+                "tell you how sure each reading is. I screen, I do not "
+                "diagnose: a vet should always examine the dog.",
                 is_user=False,
                 meta=f"grounded in {len(facts)} facts from SQL · {CORTEX_MODEL}")
         for turn in history:
@@ -5627,8 +6004,9 @@ def _page_9():
             # this, so the one time a red edge appears it means something.
             chat_bubble(turn["a"], is_user=False,
                         hue=None if turn.get("ok") else "#B91C1C",
-                        meta=(f'AI_COMPLETE · {CORTEX_MODEL} · answered from '
-                              f'{turn["n"]} warehouse facts' if turn.get("ok")
+                        meta=(f'AI_COMPLETE · {turn.get("model") or CORTEX_MODEL}'
+                              f' · answered from {turn["n"]} warehouse facts'
+                              if turn.get("ok")
                               else "no answer — the call failed, nothing was "
                                    "substituted for it"))
 
@@ -5638,8 +6016,8 @@ def _page_9():
         # itself out of the flow and pins to the bottom of the viewport, below
         # the page footer and outside this column.
         st.text_input("Message: ", key="tt_chat_box", on_change=_chat_submit,
-                      placeholder="Ask about the pack, the syndromes, the "
-                                  "classifier or the pipeline")
+                      placeholder="e.g. Which dog needs a vet most? · Tell me "
+                                  "about Dog 74 · What should I check today?")
 
         # Starters. Five equal columns rather than a weighted split: the last
         # one was 1/12 of the row and rendered the word "Clear" as "Cle ar".
@@ -5650,9 +6028,14 @@ def _page_9():
         chips[4].button("Clear", key="chat_clear", on_click=_chat_clear,
                         use_container_width=True)
 
-        with st.expander(f"the exact context the model was given ({len(facts)} "
+        # The LAST question's context, vet notes included — that is what the
+        # answer above it was actually built from.
+        _last = history[-1] if history else {}
+        _ctx = _last.get("ctx") or context
+        _n = _last.get("n") or len(facts)
+        with st.expander(f"the exact context the model was given ({_n} "
                          f"facts from SQL)"):
-            st.code(context or "(no facts)", language="text")
+            st.code(_ctx or "(no facts)", language="text")
 
 
 # ===========================================================================

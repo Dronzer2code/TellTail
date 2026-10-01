@@ -463,15 +463,20 @@ CREATE OR REPLACE DYNAMIC TABLE MARTS.PACK_STATUS
     REFRESH_MODE = FULL
     COMMENT      = 'One row per dog: current state, deviation, latest epoch.'
 AS
+-- Freshness and current state are two different "latest" rows, on purpose.
+-- The newest second is usually still landing — the replayer has written part
+-- of it, it fails the sample-count gate and reads UNKNOWN — so the card shows
+-- the latest second that was actually classified, while "2m ago" still
+-- measures from the newest second of any kind.
 WITH latest AS (
     SELECT dog_id, MAX(epoch_ts) AS last_epoch_ts
     FROM MARTS.EPOCH_STATES
     GROUP BY dog_id
 ),
 cur AS (
-    SELECT s.dog_id, s.epoch_ts, s.state, s.state_source, s.activity_index
+    SELECT s.dog_id, s.epoch_ts, s.state, s.state_source, s.model_confidence
     FROM MARTS.EPOCH_STATES s
-    JOIN latest l ON l.dog_id = s.dog_id AND l.last_epoch_ts = s.epoch_ts
+    WHERE s.state <> 'UNKNOWN'
     QUALIFY ROW_NUMBER() OVER (PARTITION BY s.dog_id ORDER BY s.epoch_ts DESC) = 1
 ),
 dev AS (
@@ -482,9 +487,22 @@ dev AS (
     WHERE epoch_ts >= (SELECT DATEADD('minute', -15, MAX(epoch_ts)) FROM MARTS.DOG_DEVIATION)
     GROUP BY dog_id
 ),
+-- Trust, in the two numbers a reader actually wants:
+--   epochs_model          seconds the trained classifier labelled (MODEL).
+--                         Everything else — RULES, HEURISTIC, GEOMETRY,
+--                         CONTEXT, LOW_QUALITY — is a rule over the features,
+--                         and all of it counts against this share. The card
+--                         says "% by model", so the rules classifier must not
+--                         count as the model.
+--   avg_model_confidence  the classifier's own probability for the class it
+--                         picked, averaged over MODEL seconds. NULL under the
+--                         rules classifier, which has no probability to give.
+-- epochs_heuristic stays: the honesty banner and the pack gauge read it.
 epochs AS (
     SELECT dog_id, COUNT(*) AS epochs_total,
-           SUM(IFF(state_source = 'HEURISTIC', 1, 0)) AS epochs_heuristic
+           SUM(IFF(state_source = 'HEURISTIC', 1, 0))          AS epochs_heuristic,
+           SUM(IFF(state_source = 'MODEL', 1, 0))              AS epochs_model,
+           AVG(IFF(state_source = 'MODEL', model_confidence, NULL)) AS avg_model_confidence
     FROM MARTS.EPOCH_STATES GROUP BY dog_id
 )
 SELECT
@@ -492,19 +510,24 @@ SELECT
     d.breed, d.sex, d.age_years, d.weight_kg, d.cohort_id, d.age_band, d.weight_band,
     c.state                                           AS current_state,
     c.state_source                                    AS current_state_source,
-    c.epoch_ts                                        AS last_epoch_ts,
+    ROUND(c.model_confidence, 3)                      AS current_state_confidence,
+    l.last_epoch_ts                                   AS last_epoch_ts,
     -- Staleness is measured against the PIPELINE's clock, not the wall clock.
     -- The replayer stamps sample_ts in dog time and pushes it faster than real
     -- time at --speed > 1, so MAX(epoch_ts) runs ahead of CURRENT_TIMESTAMP()
     -- and a wall-clock comparison would report every dog as negatively stale.
-    DATEDIFF('second', c.epoch_ts,
+    DATEDIFF('second', l.last_epoch_ts,
              (SELECT MAX(epoch_ts) FROM MARTS.EPOCH_STATES)) AS seconds_since_last_epoch,
     ROUND(dev.z_self_recent, 3)                       AS z_self,
     ROUND(dev.z_cohort_recent, 3)                     AS z_cohort,
     e.epochs_total,
     e.epochs_heuristic,
-    ROUND(100.0 * e.epochs_heuristic / NULLIF(e.epochs_total, 0), 1) AS pct_heuristic
+    ROUND(100.0 * e.epochs_heuristic / NULLIF(e.epochs_total, 0), 1) AS pct_heuristic,
+    e.epochs_model,
+    ROUND(100.0 * e.epochs_model / NULLIF(e.epochs_total, 0), 1)     AS pct_model,
+    ROUND(e.avg_model_confidence, 3)                                 AS avg_model_confidence
 FROM REF.V_DOG_COHORT d
+LEFT JOIN latest l   ON l.dog_id   = d.dog_id
 LEFT JOIN cur    c   ON c.dog_id   = d.dog_id
 LEFT JOIN dev        ON dev.dog_id = d.dog_id
 LEFT JOIN epochs e   ON e.dog_id   = d.dog_id;
